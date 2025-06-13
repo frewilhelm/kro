@@ -95,7 +95,7 @@ func newCRDWrapper(cfg CRDWrapperConfig) *CRDWrapper {
 // breaking changes.
 func (w *CRDWrapper) Ensure(ctx context.Context, crd v1.CustomResourceDefinition) error {
 	log := logr.FromContext(ctx)
-	_, err := w.Get(ctx, crd.Name)
+	existingCRD, err := w.Get(ctx, crd.Name)
 	if err != nil {
 		if !apierrors.IsNotFound(err) {
 			return fmt.Errorf("failed to check for existing CRD: %w", err)
@@ -106,8 +106,31 @@ func (w *CRDWrapper) Ensure(ctx context.Context, crd v1.CustomResourceDefinition
 			return fmt.Errorf("failed to create CRD: %w", err)
 		}
 	} else {
+		// passed CRD should only contain one version
+		if len(crd.Spec.Versions) != 1 {
+			return fmt.Errorf("CRD %s must have exactly one version defined", crd.Name)
+		}
+
+		// Check if the new version already exists
+		for _, version := range existingCRD.Spec.Versions {
+			if version.Name == crd.Spec.Versions[0].Name {
+				// TODO: Discuss if we should allow overwriting existing versions
+				return fmt.Errorf("version %s already exists in CRD %s", crd.Spec.Versions[0].Name, crd.Name)
+			}
+		}
+
+		//
+
+		existingCRD.Spec.Versions = append(existingCRD.Spec.Versions, crd.Spec.Versions[0])
+
+		// None-conversion-strategy contains only API version updates without changing the schema.
+		//   e.g. for promotion v1alpha1 -> v1beta1 -> v1
+		// If the schema changes, we need conversion-webhooks which requires a webhook server (from kro?)
+
+		// Check out https://kubernetes.io/docs/tasks/manage-kubernetes-objects/storage-version-migration/
+
 		log.Info("Updating existing CRD", "name", crd.Name)
-		if err := w.patch(ctx, crd); err != nil {
+		if err := w.patch(ctx, existingCRD); err != nil {
 			return fmt.Errorf("failed to patch CRD: %w", err)
 		}
 	}
@@ -125,7 +148,7 @@ func (w *CRDWrapper) create(ctx context.Context, crd v1.CustomResourceDefinition
 	return err
 }
 
-func (w *CRDWrapper) patch(ctx context.Context, newCRD v1.CustomResourceDefinition) error {
+func (w *CRDWrapper) patch(ctx context.Context, newCRD *v1.CustomResourceDefinition) error {
 	patchBytes, err := json.Marshal(newCRD)
 	if err != nil {
 		return fmt.Errorf("failed to marshal CRD for patch: %w", err)

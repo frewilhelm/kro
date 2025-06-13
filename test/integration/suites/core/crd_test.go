@@ -181,6 +181,45 @@ var _ = Describe("CRD", func() {
 				return errors.IsNotFound(err)
 			}, 10*time.Second, time.Second).Should(BeTrue())
 		})
+
+		FIt("should add another CRD version when ResourceGraphDefinition add a new version to the schema", func() {
+			// Create ResourceGraphDefinition
+			rgdV1 := generator.NewResourceGraphDefinition("test-crd-v1",
+				generator.WithSchema(
+					"TestVersion", "v1alpha1",
+					map[string]interface{}{
+						"field1": "string",
+					},
+					nil,
+				),
+			)
+			Expect(env.Client.Create(ctx, rgdV1)).To(Succeed())
+
+			// Wait for CRD creation
+			crdName := "testversions.kro.run"
+			Eventually(func() error {
+				return env.Client.Get(ctx, types.NamespacedName{Name: crdName},
+					&apiextensionsv1.CustomResourceDefinition{})
+			}, 5*time.Minute).WithContext(ctx).Should(Succeed())
+
+			// TODO: Check for version
+
+			rgdV2 := generator.NewResourceGraphDefinition("test-crd-v2",
+				generator.WithSchema(
+					"TestVersion", "v1alpha2",
+					map[string]interface{}{
+						"field1": "string",
+						"field2": "integer | default=42",
+					},
+					nil,
+				),
+			)
+			Expect(env.Client.Create(ctx, rgdV2)).To(Succeed())
+
+			time.Sleep(10 * time.Minute)
+
+			// TODO: Check for new version
+		})
 	})
 
 	Context("CRD Watch Reconciliation", func() {
