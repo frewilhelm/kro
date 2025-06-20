@@ -22,6 +22,7 @@ import (
 
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -105,34 +106,66 @@ func (w *CRDWrapper) Ensure(ctx context.Context, crd v1.CustomResourceDefinition
 		if err := w.create(ctx, crd); err != nil {
 			return fmt.Errorf("failed to create CRD: %w", err)
 		}
-	} else {
-		// passed CRD should only contain one version
-		if len(crd.Spec.Versions) != 1 {
-			return fmt.Errorf("CRD %s must have exactly one version defined", crd.Name)
+
+		return nil
+	}
+
+	// Currently, a RGD can only contain one version. If this changes in the future, this logic needs to be adapted.
+	if len(crd.Spec.Versions) != 1 {
+		return fmt.Errorf("CRD %s must have exactly one version defined", crd.Name)
+	}
+
+	// Currently, we only support adding new versions with "None" conversion strategy.
+	if existingCRD.Spec.Conversion != nil && existingCRD.Spec.Conversion.Strategy != v1.NoneConverter {
+		return fmt.Errorf("CRD %s already exists with a conversion strategy other than 'None'. Only 'None' conversion strategy is supported for adding new versions", crd.Name)
+	}
+
+	// Get the CRD version that is stored to check for schema-differences
+	var versionStored *v1.CustomResourceDefinitionVersion
+	versionExists := false
+
+	for i, version := range existingCRD.Spec.Versions {
+		if version.Storage {
+			versionStored = &version
 		}
 
-		// Check if the new version already exists
-		for _, version := range existingCRD.Spec.Versions {
-			if version.Name == crd.Spec.Versions[0].Name {
-				// TODO: Discuss if we should allow overwriting existing versions
-				return fmt.Errorf("version %s already exists in CRD %s", crd.Spec.Versions[0].Name, crd.Name)
-			}
+		if version.Name == crd.Spec.Versions[0].Name {
+			versionExists = true
+
+			log.Info("Updating existing CRD", "name", crd.Name)
+			existingCRD.Spec.Versions[i] = crd.Spec.Versions[0]
+			break
+		}
+	}
+
+	if !versionExists {
+		// This can never happen as one CRD version must always be stored.
+		// (Nevertheless, we check it to avoid nil pointer dereference)
+		if versionStored == nil {
+			return fmt.Errorf("Cannot add new version %s to CRD %s: no existing storage version found",
+				crd.Spec.Versions[0].Name, crd.Name)
 		}
 
-		//
+		if !equality.Semantic.DeepEqual(versionStored.Schema, crd.Spec.Versions[0].Schema) {
+			return fmt.Errorf("Cannot add new version %s to CRD %s: existing version %s has a different schema",
+				crd.Spec.Versions[0].Name, crd.Name, versionStored.Name)
+		}
 
+		existingCRD.Spec.Conversion = &v1.CustomResourceConversion{
+			Strategy: v1.NoneConverter,
+		}
+
+		// We must ensure that the new version is not marked as storage version, as there must already be one in the
+		// api-server.
+		// Currently, kro defaults every CRD version to be the storage version, so we need to set it to false here.
+		crd.Spec.Versions[0].Storage = false
+
+		log.Info("Adding a new CRD API version", "name", crd.Name, "version", crd.Spec.Versions[0].Name)
 		existingCRD.Spec.Versions = append(existingCRD.Spec.Versions, crd.Spec.Versions[0])
+	}
 
-		// None-conversion-strategy contains only API version updates without changing the schema.
-		//   e.g. for promotion v1alpha1 -> v1beta1 -> v1
-		// If the schema changes, we need conversion-webhooks which requires a webhook server (from kro?)
-
-		// Check out https://kubernetes.io/docs/tasks/manage-kubernetes-objects/storage-version-migration/
-
-		log.Info("Updating existing CRD", "name", crd.Name)
-		if err := w.patch(ctx, existingCRD); err != nil {
-			return fmt.Errorf("failed to patch CRD: %w", err)
-		}
+	if err := w.patch(ctx, existingCRD); err != nil {
+		return fmt.Errorf("failed to patch CRD: %w", err)
 	}
 
 	return w.waitForReady(ctx, crd.Name)

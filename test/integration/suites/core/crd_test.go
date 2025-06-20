@@ -181,44 +181,40 @@ var _ = Describe("CRD", func() {
 				return errors.IsNotFound(err)
 			}, 10*time.Second, time.Second).Should(BeTrue())
 		})
+	})
 
-		FIt("should add another CRD version when ResourceGraphDefinition add a new version to the schema", func() {
-			// Create ResourceGraphDefinition
-			rgdV1 := generator.NewResourceGraphDefinition("test-crd-v1",
-				generator.WithSchema(
-					"TestVersion", "v1alpha1",
-					map[string]interface{}{
-						"field1": "string",
-					},
-					nil,
-				),
-			)
-			Expect(env.Client.Create(ctx, rgdV1)).To(Succeed())
+	Context("CRD Versioning", func() {
+		It("should add CRD versions when another ResourceGraphDefinition adds a new version to the schema", func() {
+			rgdVersions := []string{"v1alpha1", "v1beta1", "v1"}
 
-			// Wait for CRD creation
-			crdName := "testversions.kro.run"
+			for _, version := range rgdVersions {
+				// Create ResourceGraphDefinition for each version
+				rgd := generator.NewResourceGraphDefinition(fmt.Sprintf("test-crd-%s", version),
+					generator.WithSchema(
+						"TestVersioning", version,
+						map[string]interface{}{
+							"field1": "string",
+						},
+						nil,
+					),
+				)
+				Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+			}
+
 			Eventually(func() error {
-				return env.Client.Get(ctx, types.NamespacedName{Name: crdName},
-					&apiextensionsv1.CustomResourceDefinition{})
-			}, 5*time.Minute).WithContext(ctx).Should(Succeed())
+				var crd apiextensionsv1.CustomResourceDefinition
+				err := env.Client.Get(ctx, types.NamespacedName{Name: "testversionings.kro.run"},
+					&crd)
+				if err != nil {
+					return err
+				}
 
-			// TODO: Check for version
+				if len(crd.Spec.Versions) != 3 {
+					return fmt.Errorf("expected %d versions, got %d", len(rgdVersions), len(crd.Spec.Versions))
+				}
 
-			rgdV2 := generator.NewResourceGraphDefinition("test-crd-v2",
-				generator.WithSchema(
-					"TestVersion", "v1alpha2",
-					map[string]interface{}{
-						"field1": "string",
-						"field2": "integer | default=42",
-					},
-					nil,
-				),
-			)
-			Expect(env.Client.Create(ctx, rgdV2)).To(Succeed())
-
-			time.Sleep(10 * time.Minute)
-
-			// TODO: Check for new version
+				return nil
+			}, 10*time.Second).Should(Succeed())
 		})
 	})
 

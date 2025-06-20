@@ -37,7 +37,7 @@ import (
 // ReconcileConfig holds configuration parameters for the reconciliation process.
 // It allows the customization of various aspects of the controller's behavior.
 type ReconcileConfig struct {
-	// DefaultRequeueDuration is the default duration to wait before requeueing a
+	// DefaultRequeueDuration is the default duration to wait before requeueing
 	// a reconciliation if no specific requeue time is set.
 	DefaultRequeueDuration time.Duration
 	// DeletionGraceTimeDuration is the duration to wait after initializing a resource
@@ -67,7 +67,7 @@ type ReconcileConfig struct {
 //
 // It is important to state that when the controller is reconciling an instance, it
 // creates and uses a new instance of the ResourceGraphDefinitionRuntime to uniquely manage
-// the state of the instance and its sub-resources. This ensure that at each
+// the state of the instance and its sub-resources. This ensures that at each
 // reconciliation loop, the controller is working with a fresh state of the instance
 // and its sub-resources.
 type Controller struct {
