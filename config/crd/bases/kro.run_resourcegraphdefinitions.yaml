@@ -187,6 +187,9 @@ spec:
                       The group of the resourcegraphdefinition. This is used to set the API group
                       of the generated CRD. If omitted, it defaults to "kro.run".
                     type: string
+                    x-kubernetes-validations:
+                    - message: Group is immutable
+                      rule: self == oldSelf
                   kind:
                     description: |-
                       The kind of the resourcegraphdefinition. This is used to generate
@@ -203,6 +206,9 @@ spec:
                       to the SimpleSchema spec
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
+                    x-kubernetes-validations:
+                    - message: Spec is immutable
+                      rule: self == oldSelf
                   status:
                     description: |-
                       The status of the resourcegraphdefinition. This is the status of the CRD
@@ -210,6 +216,9 @@ spec:
                       SimpleSchema spec.
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
+                    x-kubernetes-validations:
+                    - message: Status is immutable
+                      rule: self == oldSelf
                   types:
                     description: |-
                       Types is a map of custom type definitions. These can be used in the spec
@@ -217,6 +226,9 @@ spec:
                       the SimpleSchema spec.
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
+                    x-kubernetes-validations:
+                    - message: Types are immutable
+                      rule: self == oldSelf
                   validation:
                     description: |-
                       Validation is a list of validation rules that are applied to the

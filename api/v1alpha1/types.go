@@ -66,22 +66,25 @@ type Schema struct {
 	// The group of the resourcegraphdefinition. This is used to set the API group
 	// of the generated CRD. If omitted, it defaults to "kro.run".
 	//
-	// +kubebuilder:validation:Optional
 	// +kubebuilder:default="kro.run"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Group is immutable"
 	Group string `json:"group,omitempty"`
 	// The spec of the resourcegraphdefinition. Typically, this is the spec of
 	// the CRD that the resourcegraphdefinition is managing. This is adhering
 	// to the SimpleSchema spec
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Spec is immutable"
 	Spec runtime.RawExtension `json:"spec,omitempty"`
 
 	// Types is a map of custom type definitions. These can be used in the spec
 	// of the resourcegraphdefinition. Each type definition is also adhering to
 	// the SimpleSchema spec.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Types are immutable"
 	Types runtime.RawExtension `json:"types,omitempty"`
 
 	// The status of the resourcegraphdefinition. This is the status of the CRD
 	// that the resourcegraphdefinition is managing. This is adhering to the
 	// SimpleSchema spec.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Status is immutable"
 	Status runtime.RawExtension `json:"status,omitempty"`
 	// Validation is a list of validation rules that are applied to the
 	// resourcegraphdefinition.

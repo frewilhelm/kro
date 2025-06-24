@@ -99,58 +99,6 @@ var _ = Describe("CRD", func() {
 			}, 10*time.Second, time.Second).Should(Succeed())
 		})
 
-		It("should update CRD when ResourceGraphDefinition is updated", func() {
-			// Create initial ResourceGraphDefinition
-			rgd := generator.NewResourceGraphDefinition("test-crd-update",
-				generator.WithSchema(
-					"TestUpdate", "v1alpha1",
-					map[string]interface{}{
-						"field1": "string",
-						"field2": "integer | default=42",
-					},
-					nil,
-				),
-			)
-			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
-
-			// Wait for initial CRD
-			crd := &apiextensionsv1.CustomResourceDefinition{}
-			Eventually(func() error {
-				return env.Client.Get(ctx, types.NamespacedName{
-					Name: "testupdates.kro.run",
-				}, crd)
-			}, 10*time.Second, time.Second).Should(Succeed())
-
-			// Update ResourceGraphDefinition with new fields
-			Eventually(func(g Gomega) {
-				err := env.Client.Get(ctx, types.NamespacedName{
-					Name: rgd.Name,
-				}, rgd)
-				g.Expect(err).ToNot(HaveOccurred())
-
-				rgd.Spec.Schema.Spec = toRawExtension(map[string]interface{}{
-					"field1": "string",
-					"field2": "integer | default=42",
-					"field3": "boolean",
-				})
-
-				err = env.Client.Update(ctx, rgd)
-				g.Expect(err).ToNot(HaveOccurred())
-			}, 10*time.Second, time.Second).Should(Succeed())
-
-			// Verify CRD is updated
-			Eventually(func(g Gomega) {
-				err := env.Client.Get(ctx, types.NamespacedName{
-					Name: "testupdates.kro.run",
-				}, crd)
-				g.Expect(err).ToNot(HaveOccurred())
-
-				props := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties
-				g.Expect(props["spec"].Properties).To(HaveLen(3))
-				g.Expect(props["spec"].Properties["field3"].Type).To(Equal("boolean"))
-			}, 10*time.Second, time.Second).Should(Succeed())
-		})
-
 		It("should delete CRD when ResourceGraphDefinition is deleted", func() {
 			// Create ResourceGraphDefinition
 			rgd := generator.NewResourceGraphDefinition("test-crd-delete",
