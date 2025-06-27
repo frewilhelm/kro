@@ -42,6 +42,7 @@ func TestCore(t *testing.T) {
 			},
 		)
 		Expect(err).NotTo(HaveOccurred())
+		Expect(env).NotTo(BeNil())
 	})
 	AfterSuite(func() {
 		err := (func() (err error) {

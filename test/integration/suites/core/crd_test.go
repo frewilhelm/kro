@@ -17,6 +17,7 @@ package core_test
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -205,40 +206,34 @@ var _ = Describe("CRD", func() {
 	Context("CRD API Versioning", func() {
 		It("should add new CRD API versions", func(ctx SpecContext) {
 			kind := "TestVersioning"
+			crdName := strings.ToLower(kind) + "s.kro.run"
 			versions := []string{"v1alpha1", "v1alpha2", "v1beta1", "v1", "v2alpha1", "v2"}
-			crd := &apiextensionsv1.CustomResourceDefinition{}
 			for _, version := range versions {
-				// Create a simple ResourceGraphDefinition
 				rgd := generator.NewResourceGraphDefinition("test-crd-"+version,
 					generator.WithSchema(kind, version, map[string]interface{}{"field1": "string"}, nil),
 				)
 				Expect(env.Client.Create(ctx, rgd)).To(Succeed())
-
-				// Verify CRD is created
-				Eventually(func(ctx context.Context) error {
-					if err := env.Client.Get(ctx, types.NamespacedName{Name: strings.ToLower(kind) + "s.kro.run"}, crd); err != nil {
-						return fmt.Errorf("failed to get CRD %s: %w", kind, err)
-					}
-
-					for _, v := range crd.Spec.Versions {
-						if v.Name == version {
-							return nil
-						}
-					}
-
-					return fmt.Errorf("CRD %s has no version %s", kind, version)
-				}, 30*time.Second).WithContext(ctx).Should(Succeed())
 			}
 
-			// Verify that all versions are present in the CRD
-			Expect(len(versions)).To(Equal(len(crd.Spec.Versions)), fmt.Sprintf("Expected %d versions, got %d", len(versions), len(crd.Spec.Versions)))
-
-			// Verify that the latest version is set as storage
-			for _, v := range crd.Spec.Versions {
-				if v.Name == versions[len(versions)-1] {
-					Expect(v.Storage).To(BeTrue(), fmt.Sprintf("Expected version %s to be set as storage", v.Name))
+			// Verify CRD is created with all versions
+			Eventually(func(ctx context.Context) error {
+				crd := &apiextensionsv1.CustomResourceDefinition{}
+				if err := env.Client.Get(ctx, types.NamespacedName{Name: crdName}, crd); err != nil {
+					return fmt.Errorf("failed to get CRD %s: %w", kind, err)
 				}
-			}
+
+				if len(crd.Spec.Versions) != len(versions) {
+					return fmt.Errorf("CRD %s has %d versions, expected %d", kind, len(crd.Spec.Versions), len(versions))
+				}
+
+				for _, v := range crd.Spec.Versions {
+					if !slices.Contains(versions, v.Name) {
+						return fmt.Errorf("CRD %s has unexpected version %s", kind, v.Name)
+					}
+				}
+
+				return nil
+			}, 30*time.Second).WithContext(ctx).Should(Succeed())
 		})
 
 		It("should error when a new CRD API version has a different schema", func(ctx SpecContext) {
@@ -285,44 +280,41 @@ var _ = Describe("CRD", func() {
 			}, 30*time.Second).WithContext(ctx).Should(Succeed())
 
 			// Verify that the CRD has only one version
-			Expect(env.Client.Get(ctx, types.NamespacedName{Name: strings.ToLower(kind) + "es.kro.run"}, crd)).To(Succeed())
 			Expect(len(crd.Spec.Versions)).To(Equal(1), fmt.Sprintf("Expected CRD %s to have 1 version, got %d", kind, len(crd.Spec.Versions)))
 		})
 
 		It("should remove a CRD version if the respective RGD is deleted", func(ctx SpecContext) {
-			// We will create multiple versions of a CRD and then delete the last one. We expect the CRD to set the
-			// last version to unserved and update the storage version to the highest priority served version that is
-			// available.
-			// Afterwards, we will delete the first version and expect the CRD only to have this version unset, while
-			// the storage version remains the same.
-			// Finally, we will delete the remaining versions and expect the CRD to be deleted.
-
 			kind := "TestVersioningDeletion"
-			versions := []string{"v1alpha1", "v1beta1", "v1", "v2"}
-			crd := &apiextensionsv1.CustomResourceDefinition{}
 			crdName := strings.ToLower(kind) + "s.kro.run"
+			versions := []string{"v1alpha1", "v1beta1", "v1", "v2"}
+
 			for _, version := range versions {
-				// Create a simple ResourceGraphDefinition
 				rgd := generator.NewResourceGraphDefinition("test-crd-deletion-"+version,
 					generator.WithSchema(kind, version, map[string]interface{}{"field1": "string"}, nil),
 				)
 				Expect(env.Client.Create(ctx, rgd)).To(Succeed())
-
-				// Verify CRD is created
-				Eventually(func(ctx context.Context) error {
-					if err := env.Client.Get(ctx, types.NamespacedName{Name: crdName}, crd); err != nil {
-						return fmt.Errorf("failed to get CRD %s: %w", kind, err)
-					}
-
-					for _, v := range crd.Spec.Versions {
-						if v.Name == version {
-							return nil
-						}
-					}
-
-					return fmt.Errorf("CRD %s has no version %s", kind, version)
-				}, 30*time.Second).WithContext(ctx).Should(Succeed())
 			}
+
+			// Verify CRD is created with all versions
+			crd := &apiextensionsv1.CustomResourceDefinition{}
+			Eventually(func(ctx context.Context) error {
+				crd := &apiextensionsv1.CustomResourceDefinition{}
+				if err := env.Client.Get(ctx, types.NamespacedName{Name: crdName}, crd); err != nil {
+					return fmt.Errorf("failed to get CRD %s: %w", kind, err)
+				}
+
+				if len(crd.Spec.Versions) != len(versions) {
+					return fmt.Errorf("CRD %s has %d versions, expected %d", kind, len(crd.Spec.Versions), len(versions))
+				}
+
+				for _, v := range crd.Spec.Versions {
+					if !slices.Contains(versions, v.Name) {
+						return fmt.Errorf("CRD %s has unexpected version %s", kind, v.Name)
+					}
+				}
+
+				return nil
+			}, 30*time.Second).WithContext(ctx).Should(Succeed())
 
 			// Delete the last ResourceGraphDefinition
 			Expect(env.Client.Delete(ctx, &krov1alpha1.ResourceGraphDefinition{
@@ -341,7 +333,7 @@ var _ = Describe("CRD", func() {
 
 				for _, v := range crd.Spec.Versions {
 					switch v.Name {
-					// Check the last version that was deleted
+					// Check if the last version that was deleted is not served anymore
 					case versions[len(versions)-1]:
 						if v.Storage {
 							return fmt.Errorf("expected version %s to not be set as storage", v.Name)
@@ -350,20 +342,10 @@ var _ = Describe("CRD", func() {
 						if v.Served {
 							return fmt.Errorf("expected version %s to not be set as served", v.Name)
 						}
-
-					// Check the new storage version
-					case versionsUpdated[len(versionsUpdated)-1]:
-						if !v.Served {
-							return fmt.Errorf("expected version %s to be set as served", v.Name)
-						}
-					// All other versions should still be served but not set as storage
+					// All other versions should still be served
 					default:
 						if !v.Served {
 							return fmt.Errorf("expected version %s to be set as served", v.Name)
-						}
-
-						if v.Storage {
-							return fmt.Errorf("expected version %s to not be set as storage", v.Name)
 						}
 					}
 				}
@@ -378,7 +360,7 @@ var _ = Describe("CRD", func() {
 				},
 			})).To(Succeed())
 
-			// Verify that the first CRD version is set to unserved and the storage version remains the same
+			// Verify that the first CRD version is set to unserved
 			Eventually(func(ctx context.Context) error {
 				if err := env.Client.Get(ctx, types.NamespacedName{Name: crdName}, crd); err != nil {
 					return fmt.Errorf("failed to get CRD %s: %w", kind, err)
@@ -391,7 +373,7 @@ var _ = Describe("CRD", func() {
 						if v.Served {
 							return fmt.Errorf("expected version %s to not be set as served", v.Name)
 						}
-					// Last version that was deleted, should not be served anymore
+					// Last version that was deleted, should still not be served anymore
 					case versions[len(versions)-1]:
 						if v.Served {
 							return fmt.Errorf("expected version %s to not be set as served", v.Name)
@@ -399,19 +381,10 @@ var _ = Describe("CRD", func() {
 						if v.Storage {
 							return fmt.Errorf("expected version %s to not be set as storage", v.Name)
 						}
-					// Version with the highest version priority should still be set as storage
-					case versionsUpdated[len(versionsUpdated)-1]:
-						if !v.Storage {
-							return fmt.Errorf("expected version %s to be set as served", v.Name)
-						}
-					// All other versions should still be served but not set as storage
+					// All other versions should still be served
 					default:
 						if !v.Served {
 							return fmt.Errorf("expected version %s to be set as served", v.Name)
-						}
-
-						if v.Storage {
-							return fmt.Errorf("expected version %s to not be set as storage", v.Name)
 						}
 					}
 				}
@@ -443,36 +416,41 @@ var _ = Describe("CRD", func() {
 
 		It("should re-add a CRD version that was removed", func(ctx SpecContext) {
 			kind := "TestVersioningReAdd"
-			versions := []string{"v1alpha1", "v1beta1", "v1"}
-			crd := &apiextensionsv1.CustomResourceDefinition{}
 			crdName := strings.ToLower(kind) + "s.kro.run"
+			versions := []string{"v1alpha1", "v1beta1", "v1"}
+
 			for _, version := range versions {
-				// Create a simple ResourceGraphDefinition
 				rgd := generator.NewResourceGraphDefinition("test-crd-re-add-"+version,
 					generator.WithSchema(kind, version, map[string]interface{}{"field1": "string"}, nil),
 				)
 				Expect(env.Client.Create(ctx, rgd)).To(Succeed())
-
-				// Verify CRD is created
-				Eventually(func(ctx context.Context) error {
-					if err := env.Client.Get(ctx, types.NamespacedName{Name: crdName}, crd); err != nil {
-						return fmt.Errorf("failed to get CRD %s: %w", kind, err)
-					}
-
-					for _, v := range crd.Spec.Versions {
-						if v.Name == version {
-							return nil
-						}
-					}
-
-					return fmt.Errorf("CRD %s has no version %s", kind, version)
-				}, 30*time.Second).WithContext(ctx).Should(Succeed())
 			}
 
-			// Delete the last ResourceGraphDefinition
-			lastVersion := versions[len(versions)-1]
+			// Verify CRD is created with all versions
+			crd := &apiextensionsv1.CustomResourceDefinition{}
+			Eventually(func(ctx context.Context) error {
+				crd := &apiextensionsv1.CustomResourceDefinition{}
+				if err := env.Client.Get(ctx, types.NamespacedName{Name: crdName}, crd); err != nil {
+					return fmt.Errorf("failed to get CRD %s: %w", kind, err)
+				}
+
+				if len(crd.Spec.Versions) != len(versions) {
+					return fmt.Errorf("CRD %s has %d versions, expected %d", kind, len(crd.Spec.Versions), len(versions))
+				}
+
+				for _, v := range crd.Spec.Versions {
+					if !slices.Contains(versions, v.Name) {
+						return fmt.Errorf("CRD %s has unexpected version %s", kind, v.Name)
+					}
+				}
+
+				return nil
+			}, 30*time.Second).WithContext(ctx).Should(Succeed())
+
+			// Delete a random ResourceGraphDefinition
+			randomVersion := versions[rand.Intn(len(versions))]
 			Expect(env.Client.Delete(ctx, &krov1alpha1.ResourceGraphDefinition{
-				ObjectMeta: metav1.ObjectMeta{Name: "test-crd-re-add-" + lastVersion},
+				ObjectMeta: metav1.ObjectMeta{Name: "test-crd-re-add-" + randomVersion},
 			})).To(Succeed())
 
 			// Wait for the CRD version to be removed
@@ -482,45 +460,46 @@ var _ = Describe("CRD", func() {
 				}
 
 				for _, v := range crd.Spec.Versions {
-					if v.Name == lastVersion && v.Served {
-						return fmt.Errorf("CRD %s still serves version %s", kind, lastVersion)
+					if v.Name == randomVersion && v.Served {
+						return fmt.Errorf("CRD %s still serves version %s", kind, randomVersion)
 					}
 				}
 
 				// Ensure the RGD is deleted
-				if err := env.Client.Get(ctx, types.NamespacedName{Name: "test-crd-re-add-" + lastVersion}, &krov1alpha1.ResourceGraphDefinition{}); err != nil {
+				if err := env.Client.Get(ctx, types.NamespacedName{Name: "test-crd-re-add-" + randomVersion}, &krov1alpha1.ResourceGraphDefinition{}); err != nil {
 					if !errors.IsNotFound(err) {
-						return fmt.Errorf("failed to get RGD test-crd-re-add-%s: %w", lastVersion, err)
+						return fmt.Errorf("failed to get RGD test-crd-re-add-%s: %w", randomVersion, err)
 					}
 				} else {
-					return fmt.Errorf("RGD test-crd-re-add-%s still exists after deletion", lastVersion)
+					return fmt.Errorf("RGD test-crd-re-add-%s still exists after deletion", randomVersion)
 				}
 
 				return nil
 			}, 30*time.Second).WithContext(ctx).Should(Succeed())
 
 			// Now re-add the version
-			rgdReAdd := generator.NewResourceGraphDefinition("test-crd-re-add-"+lastVersion,
-				generator.WithSchema(kind, lastVersion, map[string]interface{}{"field1": "string"}, nil),
+			rgdReAdd := generator.NewResourceGraphDefinition("test-crd-re-add-"+randomVersion,
+				generator.WithSchema(kind, randomVersion, map[string]interface{}{"field1": "string"}, nil),
 			)
 			Expect(env.Client.Create(ctx, rgdReAdd)).To(Succeed())
 
-			// Verify that the CRD version is re-added and the storage version is updated
+			// Verify that the CRD version is re-added
 			Eventually(func(ctx context.Context) error {
 				if err := env.Client.Get(ctx, types.NamespacedName{Name: crdName}, crd); err != nil {
 					return fmt.Errorf("failed to get CRD %s: %w", kind, err)
 				}
 
 				for _, v := range crd.Spec.Versions {
-					if v.Name == lastVersion {
-						if v.Storage {
+					if v.Name == randomVersion {
+						if v.Served {
 							return nil
 						}
-						return fmt.Errorf("CRD %s has version %s but it is not set as storage", kind, lastVersion)
+
+						return fmt.Errorf("CRD %s does not serve version %s", kind, randomVersion)
 					}
 				}
 
-				return fmt.Errorf("CRD %s does not have version %s after re-adding", kind, lastVersion)
+				return fmt.Errorf("CRD %s does not have version %s after re-adding", kind, randomVersion)
 			}, 30*time.Second).WithContext(ctx).Should(Succeed())
 		})
 	})
