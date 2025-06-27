@@ -46,7 +46,7 @@ func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinition(ctx c
 	}
 	// cleanup CRD
 	crdName := extractCRDName(group, rgd.Spec.Schema.Kind)
-	if err := r.cleanupResourceGraphDefinitionCRD(ctx, crdName); err != nil {
+	if err := r.cleanupResourceGraphDefinitionCRD(ctx, crdName, rgd.Spec.Schema.APIVersion); err != nil {
 		return fmt.Errorf("failed to cleanup CRD %s: %w", crdName, err)
 	}
 
@@ -64,13 +64,13 @@ func (r *ResourceGraphDefinitionReconciler) shutdownResourceGraphDefinitionMicro
 
 // cleanupResourceGraphDefinitionCRD deletes the CRD with the given name if CRD deletion is enabled.
 // If CRD deletion is disabled, it logs the skip and returns nil.
-func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinitionCRD(ctx context.Context, crdName string) error {
+func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinitionCRD(ctx context.Context, crdName, crdVersion string) error {
 	if !r.allowCRDDeletion {
 		ctrl.LoggerFrom(ctx).Info("skipping CRD deletion (disabled)", "crd", crdName)
 		return nil
 	}
 
-	if err := r.crdManager.Delete(ctx, crdName); err != nil {
+	if err := r.crdManager.Delete(ctx, crdName, crdVersion); err != nil {
 		return fmt.Errorf("error deleting CRD: %w", err)
 	}
 	return nil
