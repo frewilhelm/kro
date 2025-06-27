@@ -22,10 +22,12 @@ import (
 
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/apimachinery/pkg/version"
 	logr "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -44,7 +46,7 @@ type CRDClient interface {
 	Ensure(ctx context.Context, crd v1.CustomResourceDefinition) error
 
 	// Delete removes a CRD if it exists
-	Delete(ctx context.Context, name string) error
+	Delete(ctx context.Context, name, version string) error
 
 	// Get retrieves a CRD by name
 	Get(ctx context.Context, name string) (*v1.CustomResourceDefinition, error)
@@ -95,7 +97,7 @@ func newCRDWrapper(cfg CRDWrapperConfig) *CRDWrapper {
 // breaking changes.
 func (w *CRDWrapper) Ensure(ctx context.Context, crd v1.CustomResourceDefinition) error {
 	log := logr.FromContext(ctx)
-	_, err := w.Get(ctx, crd.Name)
+	existingCRD, err := w.Get(ctx, crd.Name)
 	if err != nil {
 		if !apierrors.IsNotFound(err) {
 			return fmt.Errorf("failed to check for existing CRD: %w", err)
@@ -106,8 +108,65 @@ func (w *CRDWrapper) Ensure(ctx context.Context, crd v1.CustomResourceDefinition
 			return fmt.Errorf("failed to create CRD: %w", err)
 		}
 	} else {
-		log.Info("Updating existing CRD", "name", crd.Name)
-		if err := w.patch(ctx, crd); err != nil {
+		// Sanity check
+		if len(crd.Spec.Versions) != 1 {
+			return fmt.Errorf("expected only one crdVersion, got %d", len(crd.Spec.Versions))
+		}
+
+		// Check if new API crdVersion is introduced or if the CRD has changed
+		var prioVersion string
+		versionExists := false
+		for i, crdVersion := range existingCRD.Spec.Versions {
+			// We currently only support promoting a crdVersion using the "None" conversion strategy. Thus, we enforce
+			// an equal schema for all versions.
+			if !equality.Semantic.DeepEqual(crdVersion.Schema, crd.Spec.Versions[0].Schema) {
+				return fmt.Errorf("CRD schema differs between versions which is currently not supported")
+			}
+
+			if crdVersion.Name == crd.Spec.Versions[0].Name {
+				if crdVersion.Served {
+					log.Info("CRD crdVersion already exists and is up-to-date", "name", crd.Name, "crdVersion", crdVersion.Name)
+					return nil
+				}
+
+				log.Info("CRD crdVersion already exists but is not served, updating", "name", crd.Name, "crdVersion", crdVersion.Name)
+				versionExists = true
+				existingCRD.Spec.Versions[i] = crd.Spec.Versions[0]
+			}
+
+			// Find the highest priority version to set it as storage version (see below)
+			// CompareKubeAwareVersionStrings returns >0 if first param is greater than the second one
+			if version.CompareKubeAwareVersionStrings(crdVersion.Name, prioVersion) > 0 {
+				prioVersion = crdVersion.Name
+			}
+		}
+
+		if version.CompareKubeAwareVersionStrings(crd.Spec.Versions[0].Name, prioVersion) > 0 {
+			prioVersion = crd.Spec.Versions[0].Name
+		}
+
+		// Append new version if it is not already present
+		if !versionExists {
+			existingCRD.Spec.Versions = append(existingCRD.Spec.Versions, crd.Spec.Versions[0])
+		}
+
+		// Loop over every existing version and set the storage version to the one with the highest priority.
+		for i, crdVersion := range existingCRD.Spec.Versions {
+			if crdVersion.Name == prioVersion {
+				log.Info("Setting CRD version as storage", "name", crd.Name, "crdVersion", existingCRD.Spec.Versions[i].Name)
+				existingCRD.Spec.Versions[i].Storage = true
+			} else {
+				existingCRD.Spec.Versions[i].Storage = false
+			}
+		}
+
+		log.Info("Set conversion strategy to 'None'", "name", crd.Name)
+		existingCRD.Spec.Conversion = &v1.CustomResourceConversion{
+			Strategy: v1.NoneConverter,
+		}
+
+		log.Info("Adding new CRD crdVersion", "name", crd.Name, "crdVersion", crd.Spec.Versions[0].Name)
+		if err := w.patch(ctx, *existingCRD); err != nil {
 			return fmt.Errorf("failed to patch CRD: %w", err)
 		}
 	}
@@ -142,14 +201,72 @@ func (w *CRDWrapper) patch(ctx context.Context, newCRD v1.CustomResourceDefiniti
 }
 
 // Delete removes a CRD if it exists
-func (w *CRDWrapper) Delete(ctx context.Context, name string) error {
+func (w *CRDWrapper) Delete(ctx context.Context, name, APIversion string) error {
 	log := logr.FromContext(ctx)
-	log.Info("Deleting CRD", "name", name)
 
-	err := w.client.Delete(ctx, name, metav1.DeleteOptions{})
-	if err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete CRD: %w", err)
+	existingCRD, err := w.Get(ctx, name)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			log.Info("CRD not found, nothing to delete", "name", name)
+			return nil
+		}
+		return fmt.Errorf("failed to get CRD %s/%s: %w", APIversion, name, err)
 	}
+
+	if len(existingCRD.Spec.Versions) > 1 {
+		log.Info("CRD has multiple versions, setting passed version to unserved", "name", name, "version", APIversion)
+
+		// Check if that version is set as storage version to reset it to the one with the highest priority
+		var prioVersion string
+		for i, crdVersion := range existingCRD.Spec.Versions {
+			// Check for the version that is set as new storage version. Must be one of the served versions.
+			if crdVersion.Name != APIversion {
+				if version.CompareKubeAwareVersionStrings(crdVersion.Name, prioVersion) > 0 && crdVersion.Served {
+					prioVersion = crdVersion.Name
+				}
+				continue
+			}
+
+			// Make sure that the version is not set as stored or served version
+			// This is currently possible, because we only support the conversion strategy "None". So, we can choose any
+			// other version as storage version.
+			existingCRD.Spec.Versions[i].Served = false
+			existingCRD.Spec.Versions[i].Storage = false
+		}
+
+		// If no served and highest-priority version was found, we can delete the CRD as it is not used anymore
+		if prioVersion == "" {
+			log.Info("No served version found, deleting CRD", "name", name)
+			err := w.client.Delete(ctx, name, metav1.DeleteOptions{})
+			if err != nil && !apierrors.IsNotFound(err) {
+				return fmt.Errorf("failed to delete CRD: %w", err)
+			}
+			return nil
+		}
+
+		// Otherwise, set the served version with the highest priority as storage version and update the CRD.
+		for i, crdVersion := range existingCRD.Spec.Versions {
+			if crdVersion.Name == prioVersion {
+				log.Info("Setting new storage version", "name", name, "version", prioVersion)
+				existingCRD.Spec.Versions[i].Storage = true
+			} else {
+				existingCRD.Spec.Versions[i].Storage = false
+			}
+		}
+
+		log.Info("Removing CRD version", "name", name, "version", APIversion)
+		err := w.patch(ctx, *existingCRD)
+		if err != nil {
+			return fmt.Errorf("failed to patch CRD to remove version %s: %w", APIversion, err)
+		}
+	} else {
+		log.Info("Deleting CRD", "name", name)
+		err := w.client.Delete(ctx, name, metav1.DeleteOptions{})
+		if err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete CRD: %w", err)
+		}
+	}
+
 	return nil
 }
 
