@@ -102,3 +102,13 @@ func HasCondition(conditions []Condition, t ConditionType) bool {
 		return c.Type == t
 	})
 }
+
+func GetCondition(conditions []Condition, t ConditionType) *Condition {
+	for _, c := range conditions {
+		if c.Type == t {
+			return &c
+		}
+	}
+
+	return nil
+}
